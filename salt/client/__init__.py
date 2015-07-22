@@ -526,13 +526,16 @@ class LocalClient(object):
 
         ret = {}
         if self.opts.get('get_cache_return', False):
-            return self.get_cli_cache_returns(
+            for fn_ret in self.get_cli_cache_returns(
                 pub_data['jid'],
                 pub_data['minions'],
                 self._get_timeout(timeout),
                 tgt,
                 expr_form,
-                **kwargs)
+                **kwargs):
+                if fn_ret:
+                    for mid, data in fn_ret.items():
+                        ret[mid] = data.get('ret', {})
         else:
             for fn_ret in self.get_cli_event_returns(
                     pub_data['jid'],
