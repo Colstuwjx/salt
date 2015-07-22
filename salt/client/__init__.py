@@ -525,19 +525,28 @@ class LocalClient(object):
             return pub_data
 
         ret = {}
-        for fn_ret in self.get_cli_event_returns(
+        if self.opts.get('get_cache_return', False):
+            return self.get_cli_cache_returns(
                 pub_data['jid'],
                 pub_data['minions'],
                 self._get_timeout(timeout),
                 tgt,
                 expr_form,
-                **kwargs):
+                **kwargs)
+        else:
+            for fn_ret in self.get_cli_event_returns(
+                    pub_data['jid'],
+                    pub_data['minions'],
+                    self._get_timeout(timeout),
+                    tgt,
+                    expr_form,
+                    **kwargs):
 
-            if fn_ret:
-                for mid, data in fn_ret.items():
-                    ret[mid] = data.get('ret', {})
+                if fn_ret:
+                    for mid, data in fn_ret.items():
+                        ret[mid] = data.get('ret', {})
 
-        return ret
+            return ret
 
     def cmd_cli(
             self,
