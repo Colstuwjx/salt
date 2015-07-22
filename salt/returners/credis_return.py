@@ -132,7 +132,7 @@ def get_jid(jid):
     serv = _get_serv()
     ret = {}
 
-    load = serv.get_load(jid)
+    load = get_load(jid)
     if not load:
         return {}
 
@@ -153,7 +153,7 @@ def get_jid_minions(jid):
     serv = _get_serv()
     ret = []
 
-    load = serv.get_load(jid)
+    load = get_load(jid)
     return load.get('minions', [])
 
 
