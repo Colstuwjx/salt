@@ -67,6 +67,7 @@ import salt.utils.event
 import salt.utils.minion
 import salt.utils.schedule
 import salt.exitcodes
+import Queue
 
 from salt._compat import string_types
 from salt.utils.debug import enable_sigusr1_handler
@@ -2143,6 +2144,7 @@ class MultiSyndic(MinionBase):
         self.jid_forward_cache = set()
 
         # create all of the syndics you need
+        self.master_queue = {}
         self.master_syndics = {}
         for master in set(self.opts['master']):
             s_opts = copy.copy(self.opts)
@@ -2151,6 +2153,26 @@ class MultiSyndic(MinionBase):
                                            'auth_wait': s_opts['acceptance_wait_time'],
                                            'dead_until': 0}
             self._connect_to_master(master)
+            self._init_master_master(master)
+
+    def _init_master_master(self, master):
+        if master in self.master_syndics:
+            self.master_queue[master] = Queue.Queue(maxsize = 100)
+            t = threading.Thread(target=self.send_call_syndict, args=(master,))
+            t.daemon = False
+            t.start()
+
+    def send_call_syndict(self,master):
+        while True:
+            try:
+                [func,args,kwargs] = self.master_queue[master].get(timeout=2)
+                syndic_dict = self.master_syndics[master]
+
+                getattr(syndic_dict['syndic'], func)(*args, **kwargs)
+            except Queue.Empty:
+                continue
+            except:
+                log.exception("send_call_syndict except")
 
     # TODO: do we need all of this?
     def _connect_to_master(self, master):
@@ -2213,20 +2235,27 @@ class MultiSyndic(MinionBase):
         for master, syndic_dict in iter_masters.items():
             if 'syndic' not in syndic_dict:
                 continue
-            if syndic_dict['dead_until'] > time.time():
-                log.error('Unable to call {0} on {1}, that syndic is dead for now'.format(func, master_id))
-                continue
+
+            #if queue is full, throw exception
             try:
-                getattr(syndic_dict['syndic'], func)(*args, **kwargs)
-                return
-            except SaltClientError:
-                log.error('Unable to call {0} on {1}, trying another...'.format(func, master_id))
-                # re-use auth-wait as backoff for syndic
-                syndic_dict['dead_until'] = time.time() + syndic_dict['auth_wait']
-                if syndic_dict['auth_wait'] < self.opts['acceptance_wait_time_max']:
-                    syndic_dict['auth_wait'] += self.opts['acceptance_wait_time']
-                continue
-        log.critical('Unable to call {0} on any masters!'.format(func))
+                self.master_queue[master].put([func,args,kwargs],0)
+            except:
+                log.exception("put to queue,queue full:{!0},master_id:{1},args:{!2},kwargs:{!3}".format(master,master,args,kwargs))
+
+        #    if syndic_dict['dead_until'] > time.time():
+        #        log.error('Unable to call {0} on {1}, that syndic is dead for now'.format(func, master_id))
+        #        continue
+        #    try:
+        #        getattr(syndic_dict['syndic'], func)(*args, **kwargs)
+        #        return
+        #    except SaltClientError:
+        #        log.error('Unable to call {0} on {1}, trying another...'.format(func, master_id))
+        #        # re-use auth-wait as backoff for syndic
+        #        syndic_dict['dead_until'] = time.time() + syndic_dict['auth_wait']
+        #        if syndic_dict['auth_wait'] < self.opts['acceptance_wait_time_max']:
+        #            syndic_dict['auth_wait'] += self.opts['acceptance_wait_time']
+        #        continue
+        #log.critical('Unable to call {0} on any masters!'.format(func))
 
     def iter_master_options(self, master_id=None):
         '''
