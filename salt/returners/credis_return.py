@@ -133,6 +133,9 @@ def get_jid(jid):
     ret = {}
 
     load = serv.get_load(jid)
+    if not load:
+        return {}
+
     for minion in load['minions']:
         data = serv.get('{0}:{1}'.format(minion, jid))
         if data:
@@ -151,7 +154,7 @@ def get_jid_minions(jid):
     ret = []
 
     load = serv.get_load(jid)
-    return load['minions']
+    return load.get('minions', [])
 
 
 def get_fun(fun):
