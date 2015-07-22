@@ -535,7 +535,7 @@ class LocalClient(object):
                 **kwargs):
                 if fn_ret:
                     for mid, data in fn_ret.items():
-                        ret[mid] = data.get('ret', {})
+                        ret[mid] = data.get('return', {})
         else:
             for fn_ret in self.get_cli_event_returns(
                     pub_data['jid'],
@@ -549,7 +549,7 @@ class LocalClient(object):
                     for mid, data in fn_ret.items():
                         ret[mid] = data.get('ret', {})
 
-            return ret
+        return ret
 
     def cmd_cli(
             self,
@@ -944,12 +944,12 @@ class LocalClient(object):
             time_left = timeout_at - int(time.time())
             wait = max(1, time_left)
 
-            ret_minions = self.returners['{0}.get_jid_minions'.format(self.opts['master_job_cache'])](jid)
-            found |= set(ret_minions)
+            ret_minions = self.returners['{0}.get_jid'.format(self.opts['master_job_cache'])](jid)
+            found |= set(ret_minions.keys())
 
             # Update the minions first
-            job_load = self.returners['{0}.get_load'.format(self.opts['master_job_cache'])](jid)
-            minions.update(set(job_load['minions']))
+            job_minions = self.returners['{0}.get_jid_minions'.format(self.opts['master_job_cache'])](jid)
+            minions.update(set(job_minions))
 
             if len(found.intersection(minions)) >= len(minions) and not self.opts['order_masters']:
                 # All minions have returned, break out of the loop
@@ -980,7 +980,7 @@ class LocalClient(object):
 
                     gather_minions = self.returners['{0}.get_jid'.format(self.opts['master_job_cache'])](jinfo['jid'])
                     for _id, _ret in gather_minions.iteritems():
-                        if _ret != {}:
+                        if _ret['return'] != {}:
                             if _id not in minions:
                                 minions.add(_id)
 
@@ -993,13 +993,18 @@ class LocalClient(object):
 
                 if not minion_running:
                     break
+                else:
+                    #more time
+                    timeout_at = time.time() + timeout
 
         #now, collect all returns & not returned.
         tgted_minions = self.returners['{0}.get_load'.format(self.opts['master_job_cache'])](jid)['minions']
         all_returns = self.returners['{0}.get_jid'.format(self.opts['master_job_cache'])](jid)
+
         for _id in tgted_minions:
-            if _id not in all_returns and expect_minions:
-                ret[_id] = {'failed': True}
+            if _id not in all_returns:
+                if expect_minions:
+                    ret[_id] = {'failed': True}
             else:
                 ret[_id] = all_returns[_id]
 
