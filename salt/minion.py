@@ -2195,7 +2195,22 @@ class MultiSyndic(MinionBase):
         '''
         if kwargs is None:
             kwargs = {}
-        for master, syndic_dict in self.iter_master_options(master_id):
+
+        # add top level master info if there is
+        # make the return pub job only send to asked one.
+        top_master = None
+        if args and '__load__' in args[0] and "kwargs" in args[0]["__load__"] and "master_id" in args[0]["__load__"]['kwargs']:
+            top_master = args[0]["__load__"]['kwargs']['master_id']
+
+        if top_master and top_master in self.master_syndics:
+            iter_masters = { top_master: self.master_syndics[top_master] }
+        else:
+            iter_masters = self.master_syndics
+
+        #for master, syndic_dict in self.iter_master_options(master_id):
+        #Thus, make all call_syndic event return to two or more mofms, not the exactly one.
+        #for master, syndic_dict in self.master_syndics.items():
+        for master, syndic_dict in iter_masters.items():
             if 'syndic' not in syndic_dict:
                 continue
             if syndic_dict['dead_until'] > time.time():
