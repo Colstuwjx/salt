@@ -730,6 +730,61 @@ class LocalClient(object):
                                                   expr_form,
                                                   verbose))
 
+    def get_cli_cache_returns(
+            self,
+            jid,
+            minions,
+            timeout=None,
+            tgt='*',
+            tgt_type='glob',
+            verbose=False,
+            show_timeout=False,
+            show_jid=False,
+            **kwargs):
+        '''
+
+        Get the returns for the command line interface via the cache system
+
+        It's used for Master-Minion or MofM-Syndic-Minion Topo, only support 3-levels at most.
+        Syndic will never forward event to MofM, instead, they both query from job cache.
+
+        '''
+        log.trace('func get_cli_cache_returns()')
+
+        if verbose:
+            msg = 'Executing job with jid {0}'.format(jid)
+            print(msg)
+            print('-' * len(msg) + '\n')
+        elif show_jid:
+            print('jid: {0}'.format(jid))
+
+        # lazy load the connected minions
+        connected_minions = None
+
+        for id_, min_ret in self.get_cache_full_return(jid,
+                                         minions,
+                                         timeout=timeout,
+                                         tgt=tgt,
+                                         tgt_type=tgt_type,
+                                         expect_minions=(verbose or show_timeout)
+                                         ).iteritems():
+            # replace the return structure for missing minions
+            if min_ret.get('failed') is True:
+                if connected_minions is None:
+                    connected_minions = salt.utils.minions.CkMinions(self.opts).connected_ids()
+                if connected_minions and id_ not in connected_minions:
+                    yield {id_: {'out': 'no_return',
+                                 'ret': 'Minion did not return. [Not connected]'}}
+                else:
+                    yield({
+                              id_: {
+                                  'out': 'no_return',
+                                  'ret': 'Minion did not return. [No response]'
+                              }
+                          })
+            else:
+                yield {id_: min_ret}
+
     def get_cli_returns(
             self,
             jid,
@@ -824,6 +879,120 @@ class LocalClient(object):
                     yield raw
                 else:
                     yield None
+
+    def get_cache_full_return(
+            self,
+            jid,
+            minions,
+            timeout=None,
+            tgt='*',
+            tgt_type='glob',
+            expect_minions=False,
+            **kwargs):
+        '''
+        Collect the cache return and return when it finished
+        Limits: as cache system cannot iter each event, it will return job when all ends up.
+
+        :return _id,min_ret as a dict data
+        '''
+        if not isinstance(minions, set):
+            if isinstance(minions, string_types):
+                minions = set([minions])
+            elif isinstance(minions, (list, tuple)):
+                minions = set(list(minions))
+
+        if timeout is None:
+            timeout = self.opts['timeout']
+        start = int(time.time())
+
+        # this is the whole timeout value
+        # which means if the minion still running
+        # we will wait a gather_job_wait period
+        # and collect the minion_running status
+        # finally, if timeout exceeded and no minion running, then break out.
+        timeout_at = start + timeout
+        gather_syndic_wait = start + self.opts['syndic_wait']
+        gather_job_wait = self.opts.get('gather_job_timeout', 3)
+        found = set()
+        minion_running = True
+
+        # job return there.
+        ret = {}
+
+        #job load
+        job_load = self.returners['{0}.get_load'.format(self.opts['master_job_cache'])](jid)
+
+        # Check to see if the jid is real, if not return the empty dict
+        if job_load == {}:
+            log.warning('jid {0} does not exist'.format(jid))
+            return {}
+
+        while True:
+            # Collect returns until timeout is reached or all minions have returned
+            time_left = timeout_at - int(time.time())
+            wait = max(1, time_left)
+
+            ret_minions = self.returners['{0}.get_jid_minions'.format(self.opts['master_job_cache'])](jid)
+            found |= set(ret_minions)
+
+            # Update the minions first
+            job_load = self.returners['{0}.get_load'.format(self.opts['master_job_cache'])](jid)
+            minions.update(set(job_load['minions']))
+
+            if len(found.intersection(minions)) >= len(minions) and not self.opts['order_masters']:
+                # All minions have returned, break out of the loop
+                log.debug('jid {0} found all minions {1}'.format(jid, found))
+                break
+            elif len(found.intersection(minions)) >= len(minions) and self.opts['order_masters']:
+                if len(found) >= len(minions) and len(minions) > 0 and time.time() > gather_syndic_wait:
+                    # There were some minions to find and we found them
+                    # However, this does not imply that *all* masters have yet responded with expected minion lists.
+                    # Therefore, continue to wait up to the syndic_wait period (calculated in gather_syndic_wait) to see
+                    # if additional lower-level masters deliver their lists of expected
+                    # minions.
+                    break
+                    # If we get here we may not have gathered the minion list yet. Keep waiting
+                    # for all lower-level masters to respond with their minion lists
+
+            #TODO: We should have a whole timeout set, as it reached, we must drop the job!!
+            if wait <= 1:
+                #pub the find job and collect the return in gather_job_timeout period.
+                #if there is some minions which returned `is running`, update them to minions list
+                #if all returned(in this timeout) is not running, we said that the job has been finished.
+                jinfo = self.gather_job_info(jid, tgt, tgt_type)
+                jinfo_timeout = time.time() + gather_job_wait
+                minion_running = False
+                while True:
+                    if jinfo_timeout <= time.time():
+                        break
+
+                    gather_minions = self.returners['{0}.get_jid'.format(self.opts['master_job_cache'])](jinfo['jid'])
+                    for _id, _ret in gather_minions.iteritems():
+                        if _ret != {}:
+                            if _id not in minions:
+                                minions.add(_id)
+
+                            minion_running = True
+
+                    if len(set(gather_minions.keys()).intersection(minions)) >= len(minions):
+                        break
+
+                    time.sleep(0.01)
+
+                if not minion_running:
+                    break
+
+        #now, collect all returns & not returned.
+        tgted_minions = self.returners['{0}.get_load'.format(self.opts['master_job_cache'])](jid)['minions']
+        all_returns = self.returners['{0}.get_jid'.format(self.opts['master_job_cache'])](jid)
+        for _id in tgted_minions:
+            if _id not in all_returns and expect_minions:
+                ret[_id] = {'failed': True}
+            else:
+                ret[_id] = all_returns[_id]
+
+        return ret
+
 
     def get_iter_returns(
             self,
